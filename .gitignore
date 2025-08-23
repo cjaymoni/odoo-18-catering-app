@@ -1,0 +1,49 @@
+# Odoo Catering Management - Docker Environment
+
+# Logs
+logs/
+
+# IDE files
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Database backups
+*.sql
+backup_*.sql
+
+# Odoo specific
+filestore/
+sessions/
+
+# Environment
+.env
+
+# Sensitive config files
+config/odoo.conf
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+.docker/
+
+# Temporary files
+*.tmp
+*.temp
+.history/*
+__pycache__/
+volumes/
