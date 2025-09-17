@@ -1,13 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Dashboard Action -->
-    <record id="catering_dashboard_action" model="ir.actions.client">
-        <field name="name">Catering Dashboard</field>
-        <field name="tag">catering_dashboard</field>
-    </record>
-
-    <!-- Dashboard Template -->
-    <template id="DashboardTemplate" name="Catering Dashboard">
+    <template id="dashboard_template" name="Catering Dashboard Template">
         <div class="catering-dashboard">
             <div class="d-sm-flex align-items-center justify-content-between mb-4">
                 <h1 class="h3 mb-0 text-gray-800">Catering Dashboard</h1>
@@ -127,18 +120,47 @@
                     </div>
                 </div>
 
-                <!-- Recent Activity and Feedback -->
+                <!-- Feedback Summary -->
                 <div class="row">
                     <div class="col-lg-6">
                         <div class="card shadow mb-4">
                             <div class="card-header py-3">
-                                <h6 class="m-0 font-weight-bold text-primary">Customer Feedback Summary</h6>
+                                <h6 class="m-0 font-weight-bold text-primary">Customer Feedback</h6>
                             </div>
                             <div class="card-body">
-                                <div class="text-center">
-                                    <h3><t t-esc="state.data.feedback_summary.avg_rating"/>/5</h3>
-                                    <p class="text-muted">Average Rating</p>
-                                    <p><strong>Response Rate:</strong> <t t-esc="state.data.feedback_summary.response_rate"/>%</p>
+                                <div class="row">
+                                    <div class="col-sm-6">
+                                        <h4 class="text-center">
+                                            <t t-esc="state.data.feedback_summary.avg_rating"/>/5
+                                            <div class="text-warning">
+                                                <t t-esc="getStarRating(state.data.feedback_summary.avg_rating)"/>
+                                            </div>
+                                        </h4>
+                                        <p class="text-center text-muted">Average Rating</p>
+                                    </div>
+                                    <div class="col-sm-6">
+                                        <p><strong>Total Feedback:</strong> <t t-esc="state.data.feedback_summary.total_feedback"/></p>
+                                        <p><strong>Recommendation Rate:</strong> <t t-esc="state.data.feedback_summary.recommendation_rate"/>%</p>
+                                        <p><strong>Response Rate:</strong> <t t-esc="state.data.feedback_summary.response_rate"/>%</p>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-3">
+                                    <h6>Detailed Ratings:</h6>
+                                    <div class="row">
+                                        <div class="col-6">
+                                            <small>Food Quality: <span class="float-right"><t t-esc="state.data.feedback_summary.detailed_ratings.food_quality"/>/5</span></small>
+                                            <div class="progress mb-2" style="height: 5px;">
+                                                <div class="progress-bar bg-success" t-att-style="'width: ' + (state.data.feedback_summary.detailed_ratings.food_quality * 20) + '%'"></div>
+                                            </div>
+                                        </div>
+                                        <div class="col-6">
+                                            <small>Service: <span class="float-right"><t t-esc="state.data.feedback_summary.detailed_ratings.service_quality"/>/5</span></small>
+                                            <div class="progress mb-2" style="height: 5px;">
+                                                <div class="progress-bar bg-info" t-att-style="'width: ' + (state.data.feedback_summary.detailed_ratings.service_quality * 20) + '%'"></div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -150,9 +172,16 @@
                                 <h6 class="m-0 font-weight-bold text-primary">Recent Activity</h6>
                             </div>
                             <div class="card-body">
-                                <div t-foreach="state.data.recent_activity" t-as="activity" t-key="activity_index">
-                                    <p><strong><t t-esc="activity.title"/></strong><br/>
-                                    <small class="text-muted"><t t-esc="activity.description"/></small></p>
+                                <div t-foreach="state.data.recent_activity" t-as="activity" t-key="activity_index" class="d-flex align-items-center mb-3">
+                                    <div class="mr-3">
+                                        <i t-att-class="'fa fa-' + activity.icon + ' text-primary'"></i>
+                                    </div>
+                                    <div>
+                                        <h6 class="mb-0"><t t-esc="activity.title"/></h6>
+                                        <small class="text-muted"><t t-esc="activity.description"/></small>
+                                        <br/>
+                                        <small class="text-muted"><t t-esc="formatDate(activity.date)"/></small>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -164,7 +193,7 @@
                     <div class="col-12">
                         <div class="card shadow mb-4">
                             <div class="card-header py-3">
-                                <h6 class="m-0 font-weight-bold text-primary">Upcoming Events</h6>
+                                <h6 class="m-0 font-weight-bold text-primary">Upcoming Events (Next 7 Days)</h6>
                             </div>
                             <div class="card-body">
                                 <div class="table-responsive">
@@ -174,8 +203,10 @@
                                                 <th>Event</th>
                                                 <th>Customer</th>
                                                 <th>Date</th>
+                                                <th>Venue</th>
                                                 <th>Guests</th>
                                                 <th>Status</th>
+                                                <th>Total</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -183,8 +214,14 @@
                                                 <td><t t-esc="event.name"/></td>
                                                 <td><t t-esc="event.customer"/></td>
                                                 <td><t t-esc="formatDate(event.date)"/></td>
+                                                <td><t t-esc="event.venue"/></td>
                                                 <td><t t-esc="event.guests"/></td>
-                                                <td><t t-esc="event.status"/></td>
+                                                <td>
+                                                    <span t-att-class="'badge badge-' + (event.status === 'confirmed' ? 'success' : 'warning')">
+                                                        <t t-esc="event.status"/>
+                                                    </span>
+                                                </td>
+                                                <td><t t-esc="formatCurrency(event.total)"/></td>
                                             </tr>
                                         </tbody>
                                     </table>

@@ -300,6 +300,16 @@ class WhatsAppLog(models.Model):
     _description = 'WhatsApp Message Log'
     _order = 'create_date desc'
 
+    def init(self):
+        """Create database indexes for performance"""
+        super().init()
+        # Create indexes using SQL
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cater_whatsapp_log_message_sid 
+            ON cater_whatsapp_log(message_sid) 
+            WHERE message_sid IS NOT NULL;
+        """)
+
     to_number = fields.Char('To Number', required=True)
     message = fields.Text('Message', required=True)
     status = fields.Selection([

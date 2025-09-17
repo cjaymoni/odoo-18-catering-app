@@ -50,14 +50,14 @@
             <field name="partner_id" ref="partner_catering_client"/>
             <field name="event_name">Family Birthday Celebration</field>
             <field name="event_type">birthday</field>
-            <!-- Use a fixed far-future date to satisfy the event_date constraint without eval helpers -->
-            <field name="event_date">2099-01-01 18:00:00</field>
+            <!-- Use a past date to simulate a completed event -->
+            <field name="event_date">2024-12-15 18:00:00</field>
             <field name="venue">Family Home - East Legon</field>
             <field name="venue_address">Plot 123, East Legon, Accra</field>
             <field name="guest_count">25</field>
             <field name="special_requests">Please include vegetarian options and birthday cake</field>
             <field name="dietary_restrictions">No pork, some vegetarian guests</field>
-            <field name="state">confirmed</field>
+            <field name="state">completed</field>
         </record>
         
         <!-- Demo Menu Line for Client Booking -->
@@ -89,6 +89,8 @@
             <field name="timeliness">5</field>
             <field name="would_recommend">True</field>
             <field name="source">in_person</field>
+            <!-- Set feedback date after the event date -->
+            <field name="feedback_date">2024-12-16 10:00:00</field>
         </record>
         
         <!-- Assign catering groups to admin user -->

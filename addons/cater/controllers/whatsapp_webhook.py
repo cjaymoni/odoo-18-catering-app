@@ -72,6 +72,12 @@ class WhatsAppWebhookController(http.Controller):
                 'response_data': str({k: frm.get(k) for k in frm.keys()})
             })
 
+            # Process feedback response if this is a feedback message
+            if body and from_number:
+                request.env['cater.event.booking'].sudo()._process_whatsapp_feedback_response(
+                    from_number, body
+                )
+
             # Minimal TwiML response (optional). Twilio accepts 200 with empty body.
             return ''
         except Exception as e:

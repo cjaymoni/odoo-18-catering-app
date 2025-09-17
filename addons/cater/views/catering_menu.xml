@@ -87,11 +87,12 @@
               sequence="10"
               groups="catering_staff_group,catering_manager_group"/>
               
-    <!-- <menuitem id="catering_dashboard" 
+    <menuitem id="catering_dashboard" 
               name="Dashboard" 
               parent="catering_feedback_menu" 
               action="catering_dashboard_action" 
-              sequence="20"/> -->
+              sequence="20"
+              groups="catering_staff_group,catering_manager_group"/>
 
     <!-- WhatsApp Integration -->
     <menuitem id="catering_whatsapp_menu" 
@@ -111,4 +112,18 @@
               parent="catering_whatsapp_menu" 
               action="catering_whatsapp_log_action" 
               sequence="20"/>
+
+    <!-- Reports Menu -->
+    <menuitem id="catering_reports_menu" 
+              name="Reports" 
+              parent="catering_main_menu" 
+              sequence="50"
+              groups="catering_staff_group,catering_manager_group"/>
+
+    <menuitem id="catering_generate_reports_menu"
+              name="Generate Reports"
+              parent="catering_reports_menu"
+              action="catering_report_wizard_action"
+              sequence="10"
+              groups="catering_staff_group,catering_manager_group"/>
 </odoo>

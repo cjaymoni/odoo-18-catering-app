@@ -11,6 +11,23 @@ class EventBooking(models.Model):
     _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'event_date desc, create_date desc'
 
+    def init(self):
+        """Create database indexes for performance"""
+        super().init()
+        # Create indexes using SQL
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cater_booking_event_date 
+            ON cater_event_booking(event_date);
+        """)
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cater_booking_state 
+            ON cater_event_booking(state);
+        """)
+        self.env.cr.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cater_booking_partner_state 
+            ON cater_event_booking(partner_id, state);
+        """)
+
     # Basic Information
     name = fields.Char('Booking Reference', required=True, copy=False, default='New')
     partner_id = fields.Many2one('res.partner', 'Customer', required=True, tracking=True, default=lambda self: self.env.user.partner_id)
@@ -108,31 +125,82 @@ class EventBooking(models.Model):
     @api.constrains('event_date')
     def _check_event_date(self):
         for booking in self:
+            # Allow past dates for completed bookings (historical data/demo)
+            if booking.state == 'completed':
+                continue
             if booking.event_date <= fields.Datetime.now():
                 raise ValidationError("Event date must be in the future.")
 
-        @api.constrains('event_date', 'venue')
-        def _check_venue_conflict(self):
-            for booking in self:
-                if not booking.event_date or not booking.venue:
-                    continue
-                # Find overlapping bookings at the same venue (excluding self)
-                overlap = self.search([
-                    ('id', '!=', booking.id),
-                    ('venue', '=', booking.venue),
-                    ('event_date', '=', booking.event_date),
-                    ('state', 'in', ['confirmed', 'in_progress'])
-                ])
-                if overlap:
-                    raise ValidationError(f"Venue '{booking.venue}' is already booked for {booking.event_date}.")
+    @api.constrains('event_date', 'venue')
+    def _check_venue_conflict(self):
+        for booking in self:
+            if not booking.event_date or not booking.venue:
+                continue
+            # Find overlapping bookings at the same venue (excluding self)
+            overlap = self.search([
+                ('id', '!=', booking.id),
+                ('venue', '=', booking.venue),
+                ('event_date', '=', booking.event_date),
+                ('state', 'in', ['confirmed', 'in_progress'])
+            ])
+            if overlap:
+                raise ValidationError(f"Venue '{booking.venue}' is already booked for {booking.event_date}.")
     
     @api.constrains('guest_count')
     def _check_guest_count(self):
         for booking in self:
             if booking.guest_count < 1:
                 raise ValidationError("Guest count must be at least 1.")
+            elif booking.guest_count > 1000:
+                raise ValidationError("Guest count cannot exceed 1000 for a single event.")
     
-    def action_confirm(self):
+    @api.constrains('paid_amount', 'total_amount')
+    def _check_payment_amount(self):
+        for booking in self:
+            if booking.paid_amount < 0:
+                raise ValidationError("Paid amount cannot be negative.")
+            if booking.paid_amount > booking.total_amount:
+                raise ValidationError("Paid amount cannot exceed total amount.")
+    
+    @api.constrains('event_duration')
+    def _check_event_duration(self):
+        for booking in self:
+            if booking.event_duration <= 0:
+                raise ValidationError("Event duration must be positive.")
+            elif booking.event_duration > 24:
+                raise ValidationError("Event duration cannot exceed 24 hours.")
+    
+    @api.model
+    def create(self, vals):
+        # Auto-generate sequence if not provided
+        if vals.get('name', 'New') == 'New':
+            vals['name'] = self.env['ir.sequence'].next_by_code('cater.event.booking') or 'New'
+        
+        # Auto-set catering customer flag
+        if 'partner_id' in vals:
+            partner = self.env['res.partner'].browse(vals['partner_id'])
+            if not partner.is_catering_customer:
+                partner.is_catering_customer = True
+        
+        return super().create(vals)
+    
+    def write(self, vals):
+        # Prevent modification of confirmed bookings
+        if any(booking.state in ['confirmed', 'in_progress', 'completed'] for booking in self):
+            restricted_fields = ['partner_id', 'event_date', 'venue', 'guest_count']
+            if any(field in vals for field in restricted_fields) and not self.env.user.has_group('cater.catering_manager_group'):
+                raise ValidationError("Only managers can modify confirmed bookings.")
+        
+        # Clear dashboard cache when booking data changes
+        if any(field in vals for field in ['state', 'total_amount', 'create_date']):
+            self.env['cater.dashboard'].clear_dashboard_cache()
+        
+        # Disable tracking for computed fields to reduce chatter noise
+        computed_fields = ['menu_total', 'service_total', 'subtotal', 'tax_amount', 'total_amount', 'deposit_amount', 'balance_due']
+        if any(field in vals for field in computed_fields) and len(vals) == len([f for f in vals if f in computed_fields]):
+            # If only computed fields are being updated, disable tracking
+            return super(EventBooking, self.with_context(mail_notrack=True)).write(vals)
+        return super().write(vals)
         """Confirm the booking and create sale order"""
         if not self.menu_line_ids:
             raise UserError("Please add at least one menu item before confirming.")
@@ -146,6 +214,12 @@ class EventBooking(models.Model):
             body=f"Booking confirmed for {self.event_name} on {self.event_date.strftime('%Y-%m-%d %H:%M')}",
             message_type='notification'
         )
+    
+    def action_confirm(self):
+        """Confirm the booking"""
+        self.state = 'confirmed'
+        self._send_whatsapp_confirmation()
+        self.message_post(body="Booking confirmed", message_type='notification')
     
     def action_start_event(self):
         """Mark event as in progress"""
@@ -270,7 +344,7 @@ Your opinion helps us improve!
     
     @api.model
     def _cron_send_event_reminders(self):
-        """Cron job to send event reminders 24 hours before the event"""
+        """Cron job to send event reminders 24 hours before the event - Optimized"""
         from datetime import timedelta
         import logging
         _logger = logging.getLogger(__name__)
@@ -279,38 +353,200 @@ Your opinion helps us improve!
         tomorrow_start = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow_end = tomorrow.replace(hour=23, minute=59, second=59, microsecond=999999)
         
-        upcoming_bookings = self.search([
-            ('event_date', '>=', tomorrow_start),
-            ('event_date', '<=', tomorrow_end),
-            ('state', 'in', ['confirmed', 'in_progress'])
-        ])
+        # Batch process bookings to avoid memory issues
+        batch_size = 50
+        offset = 0
         
-        for booking in upcoming_bookings:
-            try:
-                booking._send_whatsapp_confirmation()
-            except Exception as e:
-                _logger.warning(f"Failed to send reminder for booking {booking.name}: {e}")
+        while True:
+            upcoming_bookings = self.search([
+                ('event_date', '>=', tomorrow_start),
+                ('event_date', '<=', tomorrow_end),
+                ('state', 'in', ['confirmed', 'in_progress']),
+                ('partner_id.whatsapp_opt_in', '=', True)  # Only opted-in customers
+            ], limit=batch_size, offset=offset)
+            
+            if not upcoming_bookings:
+                break
+                
+            for booking in upcoming_bookings:
+                try:
+                    booking._send_whatsapp_confirmation()
+                    # Commit after each successful send to avoid losing progress
+                    self.env.cr.commit()
+                except Exception as e:
+                    _logger.warning(f"Failed to send reminder for booking {booking.name}: {e}")
+                    # Continue with next booking on error
+                    continue
+            
+            offset += batch_size
     
     @api.model
     def _cron_send_feedback_requests(self):
-        """Cron job to send feedback requests for completed events"""
+        """Cron job to send feedback requests for completed events - Optimized"""
         from datetime import timedelta
         import logging
         _logger = logging.getLogger(__name__)
         
+        # Look for events completed in the last 24 hours
         yesterday = fields.Datetime.now() - timedelta(days=1)
-        completed_bookings = self.search([
-            ('state', '=', 'completed'),
-            ('event_date', '>=', yesterday.replace(hour=0, minute=0, second=0)),
-            ('event_date', '<', yesterday.replace(hour=23, minute=59, second=59)),
-            ('feedback_ids', '=', False)  # No feedback yet
-        ])
+        today = fields.Datetime.now()
         
-        for booking in completed_bookings:
-            try:
-                booking._send_feedback_request()
-            except Exception as e:
-                _logger.warning(f"Failed to send feedback request for booking {booking.name}: {e}")
+        # Batch process to avoid memory issues
+        batch_size = 30
+        offset = 0
+        
+        while True:
+            completed_bookings = self.search([
+                ('state', '=', 'completed'),
+                ('write_date', '>=', yesterday),  # Recently completed
+                ('write_date', '<', today),
+                ('feedback_ids', '=', False),  # No feedback yet
+                ('partner_id.whatsapp_opt_in', '=', True)  # Only opted-in customers
+            ], limit=batch_size, offset=offset)
+            
+            if not completed_bookings:
+                break
+                
+            for booking in completed_bookings:
+                try:
+                    booking._send_feedback_request()
+                    # Commit after each successful send
+                    self.env.cr.commit()
+                except Exception as e:
+                    _logger.warning(f"Failed to send feedback request for booking {booking.name}: {e}")
+                    continue
+            
+            offset += batch_size
+    
+    @api.model
+    def _process_whatsapp_feedback_response(self, from_number, message_body):
+        """Process WhatsApp feedback response and create feedback record"""
+        try:
+            # Find customer by mobile number
+            partner = self.env['res.partner'].search([
+                ('mobile', '=', from_number),
+                ('is_catering_customer', '=', True)
+            ], limit=1)
+            
+            if not partner:
+                _logger.info(f"No customer found for mobile number: {from_number}")
+                return False
+            
+            # Find recent completed booking without feedback
+            recent_booking = self.search([
+                ('partner_id', '=', partner.id),
+                ('state', '=', 'completed'),
+                ('feedback_ids', '=', False),
+                ('event_date', '>=', fields.Datetime.now() - timedelta(days=7))
+            ], order='event_date desc', limit=1)
+            
+            if not recent_booking:
+                _logger.info(f"No recent completed booking found for customer: {partner.name}")
+                return False
+            
+            # Parse feedback from message
+            rating, comments = self._parse_feedback_message(message_body)
+            
+            if rating:
+                # Create feedback record
+                feedback = self.env['cater.feedback'].create({
+                    'booking_id': recent_booking.id,
+                    'rating': str(rating),
+                    'comments': comments,
+                    'source': 'whatsapp',
+                    'food_quality': rating,
+                    'service_quality': rating,
+                    'presentation': rating,
+                    'timeliness': rating,
+                })
+                
+                _logger.info(f"Created feedback {feedback.id} from WhatsApp response")
+                
+                # Send thank you message
+                self._send_feedback_thank_you(partner.mobile, rating)
+                
+                return feedback
+                
+        except Exception as e:
+            _logger.error(f"Error processing WhatsApp feedback response: {str(e)}")
+            
+        return False
+    
+    @api.model
+    def _parse_feedback_message(self, message_body):
+        """Parse rating and comments from WhatsApp message"""
+        import re
+        
+        message = message_body.lower().strip()
+        rating = None
+        comments = message_body.strip()
+        
+        # Look for rating patterns
+        rating_patterns = [
+            r'(\d)\s*star',  # "5 stars", "3 star"
+            r'(\d)/5',       # "4/5", "5/5"
+            r'rating:?\s*(\d)',  # "rating: 4", "rating 5"
+            r'^(\d)\s*[-\s]',    # "5 - excellent", "4 good"
+            r'(\d)\s*out\s*of\s*5',  # "4 out of 5"
+        ]
+        
+        for pattern in rating_patterns:
+            match = re.search(pattern, message)
+            if match:
+                rating_value = int(match.group(1))
+                if 1 <= rating_value <= 5:
+                    rating = rating_value
+                    break
+        
+        # If no explicit rating found, infer from sentiment
+        if not rating:
+            positive_words = ['excellent', 'amazing', 'perfect', 'outstanding', 'fantastic', 'love', 'best']
+            negative_words = ['terrible', 'awful', 'bad', 'worst', 'hate', 'disappointing']
+            good_words = ['good', 'nice', 'fine', 'okay', 'satisfactory']
+            
+            if any(word in message for word in positive_words):
+                rating = 5
+            elif any(word in message for word in good_words):
+                rating = 4
+            elif any(word in message for word in negative_words):
+                rating = 2
+            else:
+                rating = 3  # Default neutral rating
+        
+        return rating, comments
+    
+    def _send_feedback_thank_you(self, mobile_number, rating):
+        """Send thank you message for feedback"""
+        try:
+            whatsapp_service = self.env['cater.whatsapp.service'].search([('active', '=', True)], limit=1)
+            if not whatsapp_service:
+                return
+            
+            if rating >= 4:
+                message = """
+🙏 Thank you for your wonderful feedback!
+
+We're delighted that you enjoyed our catering service. Your satisfaction is our top priority!
+
+Would you mind leaving us a review on Google? It would mean the world to us! 🌟
+
+_We look forward to serving you again soon._
+                """.strip()
+            else:
+                message = """
+🙏 Thank you for your feedback.
+
+We appreciate you taking the time to share your experience. We're always working to improve our service.
+
+Our manager will be in touch to discuss your concerns and ensure your next experience exceeds expectations.
+
+_Thank you for choosing our catering services._
+                """.strip()
+            
+            whatsapp_service.send_message(mobile_number, message)
+            
+        except Exception as e:
+            _logger.error(f"Failed to send feedback thank you: {str(e)}")
 
 
 class BookingMenuLine(models.Model):
