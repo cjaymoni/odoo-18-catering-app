@@ -15,7 +15,7 @@ access_event_booking_staff,cater.event.booking.staff,model_cater_event_booking,c
 access_booking_menu_line_staff,cater.booking.menu.line.staff,model_cater_booking_menu_line,catering_staff_group,1,1,1,1
 access_booking_service_line_staff,cater.booking.service.line.staff,model_cater_booking_service_line,catering_staff_group,1,1,1,1
 access_catering_feedback_staff,cater.feedback.staff,model_cater_feedback,catering_staff_group,1,1,0,0
-access_whatsapp_service_staff,cater.whatsapp.service.staff,model_cater_whatsapp_service,catering_staff_group,1,0,0,0
+access_whatsapp_service_staff,cater.whatsapp.service.staff,model_cater_whatsapp_service,catering_staff_group,0,0,0,0
 access_whatsapp_log_staff,cater.whatsapp.log.staff,model_cater_whatsapp_log,catering_staff_group,1,1,1,0
 access_menu_category_client,cater.menu.category.client,model_cater_menu_category,catering_client_group,1,0,0,0
 access_menu_item_client,cater.menu.item.client,model_cater_menu_item,catering_client_group,1,0,0,0

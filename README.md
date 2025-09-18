@@ -299,12 +299,113 @@ catering-odoo/
 
 ### Testing
 
+#### **Running the Test Suite**
+
+The system includes 4 comprehensive test files covering all critical functionality:
+
 ```bash
-# Run security validation
+# Run all tests
+docker-compose exec web odoo -d <DB_NAME> --test-enable --stop-after-init
+
+# Run specific test modules
+docker-compose exec web odoo -d <DB_NAME> --test-enable --test-tags=cater --stop-after-init
+
+# Run tests with verbose output
+docker-compose exec web odoo -d <DB_NAME> --test-enable --log-level=test --stop-after-init
+
+# Run tests and generate coverage report
+docker-compose exec web python3 -m pytest addons/cater/tests/ --cov=addons/cater --cov-report=html
+```
+
+#### **Test Files Overview**
+
+| **Test File**                  | **Purpose**              | **Framework**           | **Coverage**                    |
+| ------------------------------ | ------------------------ | ----------------------- | ------------------------------- |
+| `test_catering_models.py`      | Business logic testing   | TransactionCase         | Booking workflows, calculations |
+| `test_whatsapp_integration.py` | WhatsApp API integration | TransactionCase + Mocks | Twilio integration, messaging   |
+| `test_webhook_controllers.py`  | HTTP endpoint testing    | HttpCase                | Webhook processing, security    |
+| `test_security.py`             | Access control testing   | TransactionCase         | Permissions, data isolation     |
+
+#### **Individual Test Execution**
+
+```bash
+# Test business logic (models)
+docker-compose exec web odoo -d <DB_NAME> --test-enable --test-tags=test_catering_models --stop-after-init
+
+# Test WhatsApp integration
+docker-compose exec web odoo -d <DB_NAME> --test-enable --test-tags=test_whatsapp --stop-after-init
+
+# Test security and permissions
+docker-compose exec web odoo -d <DB_NAME> --test-enable --test-tags=test_security --stop-after-init
+
+# Test webhook controllers
+docker-compose exec web odoo -d <DB_NAME> --test-enable --test-tags=test_controllers --stop-after-init
+```
+
+#### **Security Validation**
+
+```bash
+# Run comprehensive security test
 ./ui_security_test.sh
 
-# Test with different users
-# Login as each user type and validate permissions
+# Manual permission testing:
+# 1. Login as each user type (Manager/Staff/Client)
+# 2. Validate access restrictions
+# 3. Test record-level security
+# 4. Verify data isolation between clients
+```
+
+#### **Performance Testing**
+
+```bash
+# Load testing with Apache Bench (install if needed)
+sudo apt-get install apache2-utils
+
+# Test concurrent users (adjust -c and -n as needed)
+ab -n 1000 -c 50 http://localhost:8069/web/login
+
+# Memory and performance monitoring
+docker stats odoo-catering
+
+# Database performance
+docker-compose exec db psql -U odoo -d <DB_NAME> -c "
+SELECT query, calls, total_time, mean_time
+FROM pg_stat_statements
+ORDER BY total_time DESC LIMIT 10;"
+```
+
+#### **Integration Testing**
+
+```bash
+# Test WhatsApp webhook endpoints
+curl -X POST http://localhost:8069/whatsapp/webhook \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "Body=Test message&From=+1234567890"
+
+# Test dashboard data loading
+docker-compose exec web python3 -c "
+import odoo
+from odoo.api import Environment
+odoo.tools.config.parse_config(['-d', '<DB_NAME>'])
+registry = odoo.registry('<DB_NAME>')
+with registry.cursor() as cr:
+    env = Environment(cr, 1, {})
+    dashboard = env['cater.dashboard']
+    data = dashboard.get_dashboard_data()
+    print('Dashboard KPIs:', data.get('kpis', {}))
+"
+```
+
+#### **Test Data Verification**
+
+```bash
+# Check test coverage results
+docker-compose exec web odoo shell -d <DB_NAME>
+
+# In Odoo shell:
+# env['cater.event.booking'].search_count([])  # Should show test bookings
+# env['cater.feedback'].search_count([])       # Should show test feedback
+# env['cater.whatsapp.log'].search_count([])   # Should show message logs
 ```
 
 ### Useful Commands
@@ -328,8 +429,19 @@ docker-compose restart web
 # Update module
 docker-compose exec web odoo -u cater -d <DB_NAME> --stop-after-init
 
+# Run tests
+docker-compose exec web odoo -d <DB_NAME> --test-enable --stop-after-init
+
+# Run specific tests
+docker-compose run --rm --no-deps web odoo -d <DB_NAME> --test-enable --test-tags=catering_security --stop-after-init
 # Backup database
 docker-compose exec db pg_dump -U odoo <DB_NAME> > backup.sql
+
+# Load testing
+ab -n 100 -c 10 http://localhost:8069/web/login
+
+# Monitor container resources
+docker stats odoo-catering
 ```
 
 ## 📞 Support

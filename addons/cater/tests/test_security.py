@@ -1,8 +1,9 @@
-from odoo.tests.common import TransactionCase, SavepointCase
+from odoo.tests.common import TransactionCase, tagged
 from odoo.exceptions import ValidationError, AccessError
 from datetime import datetime, timedelta
 
 
+@tagged('cater', 'catering_security')
 class TestSecurityAccess(TransactionCase):
 
     def setUp(self):
@@ -66,7 +67,7 @@ class TestSecurityAccess(TransactionCase):
     def test_client_can_access_own_booking(self):
         """Test that clients can access their own bookings"""
         # Switch to client user
-        booking_model = self.env['cater.event.booking'].sudo(self.client_user)
+        booking_model = self.env['cater.event.booking'].with_user(self.client_user)
         
         # Should be able to read own booking
         booking = booking_model.browse(self.client_booking.id)
@@ -76,7 +77,7 @@ class TestSecurityAccess(TransactionCase):
     def test_client_cannot_access_other_booking(self):
         """Test that clients cannot access other clients' bookings"""
         # Switch to client user
-        booking_model = self.env['cater.event.booking'].sudo(self.client_user)
+        booking_model = self.env['cater.event.booking'].with_user(self.client_user)
         
         # Should not be able to see other booking in search
         bookings = booking_model.search([])
@@ -87,7 +88,7 @@ class TestSecurityAccess(TransactionCase):
     def test_staff_can_access_all_bookings(self):
         """Test that staff can access all bookings"""
         # Switch to staff user
-        booking_model = self.env['cater.event.booking'].sudo(self.staff_user)
+        booking_model = self.env['cater.event.booking'].with_user(self.staff_user)
         
         # Should be able to see all bookings
         bookings = booking_model.search([])
@@ -98,7 +99,7 @@ class TestSecurityAccess(TransactionCase):
     def test_manager_can_access_whatsapp_config(self):
         """Test that managers can access WhatsApp configuration"""
         # Switch to manager user
-        whatsapp_model = self.env['cater.whatsapp.service'].sudo(self.manager_user)
+        whatsapp_model = self.env['cater.whatsapp.service'].with_user(self.manager_user)
         
         # Should be able to create WhatsApp service
         service = whatsapp_model.create({
@@ -112,7 +113,7 @@ class TestSecurityAccess(TransactionCase):
     def test_staff_cannot_access_whatsapp_config(self):
         """Test that staff cannot access WhatsApp configuration"""
         # Switch to staff user
-        whatsapp_model = self.env['cater.whatsapp.service'].sudo(self.staff_user)
+        whatsapp_model = self.env['cater.whatsapp.service'].with_user(self.staff_user)
         
         # Should not be able to access WhatsApp services
         with self.assertRaises(AccessError):
@@ -120,6 +121,13 @@ class TestSecurityAccess(TransactionCase):
 
     def test_client_feedback_access_rules(self):
         """Test client access rules for feedback"""
+        # Set booking event date to the past and state to completed
+        past_date = datetime.now() - timedelta(days=7)
+        self.client_booking.write({
+            'state': 'completed',
+            'event_date': past_date
+        })
+        
         # Create feedback for client booking
         feedback = self.env['cater.feedback'].create({
             'booking_id': self.client_booking.id,
@@ -128,7 +136,7 @@ class TestSecurityAccess(TransactionCase):
         })
         
         # Switch to client user
-        feedback_model = self.env['cater.feedback'].sudo(self.client_user)
+        feedback_model = self.env['cater.feedback'].with_user(self.client_user)
         
         # Should be able to access own feedback
         client_feedback = feedback_model.search([])
@@ -137,7 +145,7 @@ class TestSecurityAccess(TransactionCase):
     def test_client_cannot_delete_bookings(self):
         """Test that clients cannot delete bookings"""
         # Switch to client user
-        booking_model = self.env['cater.event.booking'].sudo(self.client_user)
+        booking_model = self.env['cater.event.booking'].with_user(self.client_user)
         
         # Should not be able to delete booking
         booking = booking_model.browse(self.client_booking.id)
@@ -159,7 +167,7 @@ class TestSecurityAccess(TransactionCase):
         })
         
         # Switch to client user
-        menu_model = self.env['cater.menu.item'].sudo(self.client_user)
+        menu_model = self.env['cater.menu.item'].with_user(self.client_user)
         
         # Should be able to read menu items
         items = menu_model.search([])
@@ -179,7 +187,7 @@ class TestSecurityAccess(TransactionCase):
         })
         
         # Switch to client user
-        menu_model = self.env['cater.menu.item'].sudo(self.client_user)
+        menu_model = self.env['cater.menu.item'].with_user(self.client_user)
         
         # Should not be able to modify
         item = menu_model.browse(menu_item.id)
@@ -195,7 +203,7 @@ class TestSecurityAccess(TransactionCase):
         })
         
         # Switch to client user
-        sale_model = self.env['sale.order'].sudo(self.client_user)
+        sale_model = self.env['sale.order'].with_user(self.client_user)
         
         # Should be able to access own sale orders
         orders = sale_model.search([])

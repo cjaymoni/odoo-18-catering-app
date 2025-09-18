@@ -1,10 +1,11 @@
-from odoo.tests.common import TransactionCase
+from odoo.tests.common import TransactionCase, tagged
 from odoo.exceptions import ValidationError
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
 import json
 
 
+@tagged('cater', 'catering_whatsapp')
 class TestWhatsAppIntegration(TransactionCase):
 
     def setUp(self):

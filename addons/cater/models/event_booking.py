@@ -89,11 +89,7 @@ class EventBooking(models.Model):
     invoice_ids = fields.One2many('account.move', 'catering_booking_id', 'Invoices')
     feedback_ids = fields.One2many('cater.feedback', 'booking_id', 'Feedback')
     
-    @api.model
-    def create(self, vals):
-        if vals.get('name', 'New') == 'New':
-            vals['name'] = self.env['ir.sequence'].next_by_code('cater.event.booking') or 'New'
-        return super().create(vals)
+
     
     @api.depends('menu_line_ids.subtotal', 'service_line_ids.subtotal')
     def _compute_totals(self):
@@ -170,19 +166,21 @@ class EventBooking(models.Model):
             elif booking.event_duration > 24:
                 raise ValidationError("Event duration cannot exceed 24 hours.")
     
-    @api.model
-    def create(self, vals):
-        # Auto-generate sequence if not provided
-        if vals.get('name', 'New') == 'New':
-            vals['name'] = self.env['ir.sequence'].next_by_code('cater.event.booking') or 'New'
+    @api.model_create_multi
+    def create(self, vals_list):
+        """Override create to handle batch creation properly"""
+        for vals in vals_list:
+            # Auto-generate sequence if not provided
+            if vals.get('name', 'New') == 'New':
+                vals['name'] = self.env['ir.sequence'].next_by_code('cater.event.booking') or 'New'
+            
+            # Auto-set catering customer flag
+            if 'partner_id' in vals:
+                partner = self.env['res.partner'].browse(vals['partner_id'])
+                if not partner.is_catering_customer:
+                    partner.is_catering_customer = True
         
-        # Auto-set catering customer flag
-        if 'partner_id' in vals:
-            partner = self.env['res.partner'].browse(vals['partner_id'])
-            if not partner.is_catering_customer:
-                partner.is_catering_customer = True
-        
-        return super().create(vals)
+        return super().create(vals_list)
     
     def write(self, vals):
         # Prevent modification of confirmed bookings
@@ -193,14 +191,20 @@ class EventBooking(models.Model):
         
         # Clear dashboard cache when booking data changes
         if any(field in vals for field in ['state', 'total_amount', 'create_date']):
-            self.env['cater.dashboard'].clear_dashboard_cache()
+            try:
+                self.env['cater.dashboard'].clear_dashboard_cache()
+            except Exception as e:
+                _logger.warning(f"Failed to clear dashboard cache: {e}")
         
         # Disable tracking for computed fields to reduce chatter noise
         computed_fields = ['menu_total', 'service_total', 'subtotal', 'tax_amount', 'total_amount', 'deposit_amount', 'balance_due']
         if any(field in vals for field in computed_fields) and len(vals) == len([f for f in vals if f in computed_fields]):
             # If only computed fields are being updated, disable tracking
             return super(EventBooking, self.with_context(mail_notrack=True)).write(vals)
+        
         return super().write(vals)
+    
+    def action_confirm(self):
         """Confirm the booking and create sale order"""
         if not self.menu_line_ids:
             raise UserError("Please add at least one menu item before confirming.")
@@ -214,10 +218,6 @@ class EventBooking(models.Model):
             body=f"Booking confirmed for {self.event_name} on {self.event_date.strftime('%Y-%m-%d %H:%M')}",
             message_type='notification'
         )
-    
-    def action_confirm(self):
-        """Confirm the booking"""
-        self.state = 'confirmed'
         self._send_whatsapp_confirmation()
         self.message_post(body="Booking confirmed", message_type='notification')
     

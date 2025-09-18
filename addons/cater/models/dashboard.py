@@ -71,7 +71,13 @@ class CateringDashboard(models.Model):
     def clear_dashboard_cache(self):
         """Clear dashboard cache when data changes"""
         self.env.invalidate_all()
-        self.get_dashboard_data.clear_cache(self)
+        # Clear ormcache for the get_dashboard_data method
+        # Since it's cached by self.env.uid, we clear for current user
+        try:
+            self.get_dashboard_data.clear_cache(self, self.env.uid)
+        except (AttributeError, TypeError):
+            # Fallback: invalidate all if clear_cache fails
+            self.env.invalidate_all()
     
     def _get_kpi_data(self):
         """Get Key Performance Indicators"""

@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 import json
 
 
-@tagged('post_install', '-at_install')
+@tagged('cater', 'catering_webhooks', 'post_install', '-at_install')
 class TestWhatsAppWebhook(HttpCase):
 
     def setUp(self):

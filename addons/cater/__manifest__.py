@@ -30,6 +30,7 @@
         'security/ir.model.access.csv',
         
         # Data
+        'data/sequences.xml',
         'data/menu_categories.xml',
         'data/service_types.xml',
         'data/demo_users.xml',
