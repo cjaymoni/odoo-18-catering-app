@@ -17,6 +17,7 @@
                 <field name="venue"/>
                 <field name="guest_count"/>
                 <field name="total_amount" widget="monetary"/>
+                <field name="feedback_received" string="Feedback" widget="boolean_toggle"/>
                 <field name="state" widget="badge" 
                        decoration-info="state=='draft'"
                        decoration-success="state=='confirmed'"
@@ -105,9 +106,15 @@
                         
                         <page string="Communication" name="communication">
                             <group>
-                                <group>
+                                <group string="WhatsApp Notifications">
                                     <field name="whatsapp_sent"/>
                                     <field name="last_whatsapp_date"/>
+                                </group>
+                                <group string="Feedback Tracking">
+                                    <field name="feedback_request_sent"/>
+                                    <field name="feedback_request_date"/>
+                                    <field name="feedback_received"/>
+                                    <field name="feedback_confirmed"/>
                                 </group>
                             </group>
                         </page>

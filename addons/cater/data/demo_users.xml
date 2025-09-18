@@ -27,8 +27,8 @@
         <record id="partner_catering_client" model="res.partner">
             <field name="name">Test Catering Client</field>
             <field name="email">client@catering.test</field>
-            <field name="phone">+233241234567</field>
-            <field name="mobile">+233241234567</field>
+            <field name="phone">+233575557050</field>
+            <field name="mobile">+233575557050</field>
             <field name="is_company">False</field>
             <field name="customer_rank">1</field>
             <field name="is_catering_customer">True</field>

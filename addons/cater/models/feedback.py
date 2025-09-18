@@ -115,7 +115,7 @@ class CateringFeedback(models.Model):
         if booking.state != 'completed':
             raise ValidationError(_("Cannot create feedback for non-completed booking."))
         
-        return self.create({
+        feedback = self.create({
             'booking_id': booking_id,
             'rating': str(rating),
             'comments': comments,
@@ -125,6 +125,14 @@ class CateringFeedback(models.Model):
             'presentation': rating,
             'timeliness': rating,
         })
+        
+        # Trigger confirmation and follow-up processes
+        booking._send_feedback_confirmation(booking.partner_id.mobile, rating, feedback)
+        
+        if rating < 4:
+            booking._create_followup_activity(feedback)
+        
+        return feedback
     
     def action_mark_helpful(self):
         """Mark feedback as helpful (for staff use)"""
@@ -181,3 +189,47 @@ class CateringFeedback(models.Model):
             'positive_rate': round(positive_rate, 1),
             'recommendation_rate': round(recommendation_rate, 1)
         }
+
+    @api.model
+    def get_recent_feedback_activity(self, limit=10):
+        """Get recent feedback activity for real-time dashboard"""
+        recent_feedback = self.search([], order='create_date desc', limit=limit)
+        
+        activity_data = []
+        for feedback in recent_feedback:
+            activity_data.append({
+                'id': feedback.id,
+                'customer_name': feedback.partner_id.name,
+                'event_name': feedback.booking_id.event_name,
+                'rating': int(feedback.rating),
+                'rating_stars': "⭐" * int(feedback.rating),
+                'comments': feedback.comments[:100] + "..." if len(feedback.comments or "") > 100 else feedback.comments,
+                'source': feedback.source,
+                'feedback_date': feedback.feedback_date,
+                'is_positive': feedback.is_positive,
+                'booking_reference': feedback.booking_id.name,
+                'time_ago': self._get_time_ago(feedback.feedback_date),
+            })
+        
+        return activity_data
+    
+    def _get_time_ago(self, date):
+        """Get human-readable time ago string"""
+        from datetime import datetime
+        
+        if not date:
+            return "Unknown"
+            
+        now = fields.Datetime.now()
+        diff = now - date
+        
+        if diff.days > 0:
+            return f"{diff.days} day{'s' if diff.days > 1 else ''} ago"
+        elif diff.seconds > 3600:
+            hours = diff.seconds // 3600
+            return f"{hours} hour{'s' if hours > 1 else ''} ago"
+        elif diff.seconds > 60:
+            minutes = diff.seconds // 60
+            return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
+        else:
+            return "Just now"

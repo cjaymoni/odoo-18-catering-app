@@ -84,12 +84,24 @@ class EventBooking(models.Model):
     last_whatsapp_date = fields.Datetime('Last WhatsApp Sent')
     partner_mobile = fields.Char('Customer Mobile', related='partner_id.mobile', store=False, readonly=False)
     
+    # Feedback Tracking
+    feedback_request_sent = fields.Boolean('Feedback Request Sent', default=False)
+    feedback_request_date = fields.Datetime('Feedback Request Date')
+    feedback_received = fields.Boolean('Feedback Received', compute='_compute_feedback_received', store=True)
+    feedback_confirmed = fields.Boolean('Feedback Confirmation Sent', default=False)
+    
+    
     # Related Records
     sale_order_id = fields.Many2one('sale.order', 'Sales Order')
     invoice_ids = fields.One2many('account.move', 'catering_booking_id', 'Invoices')
     feedback_ids = fields.One2many('cater.feedback', 'booking_id', 'Feedback')
     
 
+    
+    @api.depends('feedback_ids')
+    def _compute_feedback_received(self):
+        for booking in self:
+            booking.feedback_received = bool(booking.feedback_ids)
     
     @api.depends('menu_line_ids.subtotal', 'service_line_ids.subtotal')
     def _compute_totals(self):
@@ -325,20 +337,57 @@ _Thank you for choosing our catering services._
             if not whatsapp_service:
                 _logger.warning("No active WhatsApp service configured; skipping feedback send.")
                 return
-            message = f"""
-Thank you for choosing our catering services! 🙏
+            
+            # Create more engaging and comprehensive feedback request
+            message = f"""🎉 *Booking Confirmed!*
+
+Hello {self.partner_id.name},
+
+Your booking for *{self.event_name}* has been confirmed! 
+
+📅 *Event Details:*
+• Date: {self.event_date.strftime('%A, %B %d, %Y at %I:%M %p') if self.event_date else 'TBD'}
+• Venue: {self.venue or 'To be confirmed'}
+• Guests: {self.guest_count}
+• Total: {self.currency_id.symbol if self.currency_id else ''}{'%.2f' % self.total_amount}
+
+We're excited to cater your special event! 🍽️
+
+_Thank you for choosing our catering services._
+
+----
 
 How was your experience with *{self.event_name}*?
 
-Please rate our service: ⭐⭐⭐⭐⭐
+🌟 *Please rate our service:*
 
-Reply with:
-• Rating (1-5 stars)
-• Your feedback
+*Quick Rating:* Reply with just a number (1-5)
+⭐ 1 = Poor
+⭐⭐ 2 = Fair  
+⭐⭐⭐ 3 = Good
+⭐⭐⭐⭐ 4 = Very Good
+⭐⭐⭐⭐⭐ 5 = Excellent
 
-Your opinion helps us improve! 
+*Or detailed feedback:*
+Rate our:
+• Food Quality (1-5)
+• Service (1-5) 
+• Presentation (1-5)
+• Timeliness (1-5)
+• Comments
+
+*Example:* "5 - Food was amazing, service excellent, very happy!"
+
+Your feedback helps us serve you better! 💬
             """
-            whatsapp_service.send_message(self.partner_id.mobile, message.strip())
+            
+            # Send feedback request and log it
+            success = whatsapp_service.send_message(self.partner_id.mobile, message.strip())
+            if success:
+                # Mark that feedback request was sent
+                self.write({'feedback_request_sent': True, 'feedback_request_date': fields.Datetime.now()})
+                _logger.info(f"Feedback request sent for booking {self.name} to {self.partner_id.name}")
+            
         except Exception as e:
             _logger.error(f"Failed to send feedback request: {str(e)}")
     
@@ -387,7 +436,7 @@ Your opinion helps us improve!
         import logging
         _logger = logging.getLogger(__name__)
         
-        # Look for events completed in the last 24 hours
+        # Look for events completed in the last 24 hours without feedback request sent
         yesterday = fields.Datetime.now() - timedelta(days=1)
         today = fields.Datetime.now()
         
@@ -400,7 +449,7 @@ Your opinion helps us improve!
                 ('state', '=', 'completed'),
                 ('write_date', '>=', yesterday),  # Recently completed
                 ('write_date', '<', today),
-                ('feedback_ids', '=', False),  # No feedback yet
+                ('feedback_request_sent', '=', False),  # No feedback request sent yet
                 ('partner_id.whatsapp_opt_in', '=', True)  # Only opted-in customers
             ], limit=batch_size, offset=offset)
             
@@ -417,11 +466,15 @@ Your opinion helps us improve!
                     continue
             
             offset += batch_size
+            
+        _logger.info(f"Completed feedback request batch processing")
     
     @api.model
     def _process_whatsapp_feedback_response(self, from_number, message_body):
         """Process WhatsApp feedback response and create feedback record"""
         try:
+            _logger.info(f"Processing feedback from {from_number}: '{message_body}'")
+            
             # Find customer by mobile number
             partner = self.env['res.partner'].search([
                 ('mobile', '=', from_number),
@@ -430,7 +483,15 @@ Your opinion helps us improve!
             
             if not partner:
                 _logger.info(f"No customer found for mobile number: {from_number}")
+                # Try without is_catering_customer filter
+                partner = self.env['res.partner'].search([
+                    ('mobile', '=', from_number)
+                ], limit=1)
+                if partner:
+                    _logger.info(f"Found partner {partner.name} but not marked as catering customer")
                 return False
+            
+            _logger.info(f"Found customer: {partner.name} (ID: {partner.id})")
             
             # Find recent completed booking without feedback
             recent_booking = self.search([
@@ -442,10 +503,19 @@ Your opinion helps us improve!
             
             if not recent_booking:
                 _logger.info(f"No recent completed booking found for customer: {partner.name}")
+                # Check if there are any completed bookings at all
+                all_completed = self.search([
+                    ('partner_id', '=', partner.id),
+                    ('state', '=', 'completed')
+                ], order='event_date desc', limit=5)
+                _logger.info(f"Customer has {len(all_completed)} completed bookings total")
                 return False
+            
+            _logger.info(f"Found recent booking: {recent_booking.name} - {recent_booking.event_name}")
             
             # Parse feedback from message
             rating, comments = self._parse_feedback_message(message_body)
+            _logger.info(f"Parsed rating: {rating}, comments: '{comments}'")
             
             if rating:
                 # Create feedback record
@@ -462,13 +532,27 @@ Your opinion helps us improve!
                 
                 _logger.info(f"Created feedback {feedback.id} from WhatsApp response")
                 
-                # Send thank you message
-                self._send_feedback_thank_you(partner.mobile, rating)
+                # Send immediate confirmation
+                self._send_feedback_confirmation(partner.mobile, rating, feedback)
+                
+                # Mark that feedback was received and confirmed
+                recent_booking.write({
+                    'feedback_received': True,
+                    'feedback_confirmed': True
+                })
+                
+                # If negative feedback, create follow-up activity
+                if rating < 4:
+                    self._create_followup_activity(feedback)
                 
                 return feedback
+            else:
+                _logger.info(f"Could not parse rating from message: '{message_body}'")
                 
         except Exception as e:
             _logger.error(f"Error processing WhatsApp feedback response: {str(e)}")
+            import traceback
+            _logger.error(f"Traceback: {traceback.format_exc()}")
             
         return False
     
@@ -481,13 +565,16 @@ Your opinion helps us improve!
         rating = None
         comments = message_body.strip()
         
-        # Look for rating patterns
+        # Enhanced rating patterns to match real customer responses
         rating_patterns = [
-            r'(\d)\s*star',  # "5 stars", "3 star"
-            r'(\d)/5',       # "4/5", "5/5"
-            r'rating:?\s*(\d)',  # "rating: 4", "rating 5"
-            r'^(\d)\s*[-\s]',    # "5 - excellent", "4 good"
+            r'^(\d)\s*[-\s]',        # "5 - excellent", "4 good" (most common)
+            r'(\d)\s*star',          # "5 stars", "3 star"
+            r'(\d)/5',               # "4/5", "5/5"
+            r'rating:?\s*(\d)',      # "rating: 4", "rating 5"
             r'(\d)\s*out\s*of\s*5',  # "4 out of 5"
+            r'rate[:\s]*(\d)',       # "rate: 5", "rate 4"
+            r'score[:\s]*(\d)',      # "score: 5", "score 4"
+            r'give[:\s]*(\d)',       # "give 5", "give: 4"
         ]
         
         for pattern in rating_patterns:
@@ -496,27 +583,141 @@ Your opinion helps us improve!
                 rating_value = int(match.group(1))
                 if 1 <= rating_value <= 5:
                     rating = rating_value
+                    # Clean comments by removing the rating part
+                    comments = re.sub(pattern, '', message_body.strip()).strip(' -,.')
                     break
         
-        # If no explicit rating found, infer from sentiment
+        # Enhanced sentiment analysis for better inference
         if not rating:
-            positive_words = ['excellent', 'amazing', 'perfect', 'outstanding', 'fantastic', 'love', 'best']
-            negative_words = ['terrible', 'awful', 'bad', 'worst', 'hate', 'disappointing']
-            good_words = ['good', 'nice', 'fine', 'okay', 'satisfactory']
+            # Highly positive words
+            excellent_words = ['excellent', 'amazing', 'perfect', 'outstanding', 'fantastic', 'exceptional', 'superb', 'wonderful', 'magnificent', 'brilliant']
+            # Very positive words
+            very_good_words = ['great', 'awesome', 'lovely', 'beautiful', 'impressive', 'delicious', 'tasty', 'pleased', 'satisfied', 'happy']
+            # Positive words
+            good_words = ['good', 'nice', 'fine', 'okay', 'satisfactory', 'decent', 'pleasant', 'alright']
+            # Negative words
+            poor_words = ['poor', 'bad', 'disappointing', 'unsatisfactory', 'below average']
+            # Very negative words
+            terrible_words = ['terrible', 'awful', 'horrible', 'disgusting', 'worst', 'hate', 'appalling']
             
-            if any(word in message for word in positive_words):
+            if any(word in message for word in excellent_words):
                 rating = 5
+            elif any(word in message for word in very_good_words):
+                rating = 4  
             elif any(word in message for word in good_words):
-                rating = 4
-            elif any(word in message for word in negative_words):
+                rating = 3
+            elif any(word in message for word in poor_words):
                 rating = 2
+            elif any(word in message for word in terrible_words):
+                rating = 1
             else:
                 rating = 3  # Default neutral rating
+                
+        # Ensure comments are not empty and meaningful
+        if not comments or len(comments.strip()) < 3:
+            comments = message_body.strip()
         
         return rating, comments
     
+    def _send_feedback_confirmation(self, mobile_number, rating, feedback):
+        """Send immediate confirmation that feedback was received"""
+        try:
+            whatsapp_service = self.env['cater.whatsapp.service'].search([('active', '=', True)], limit=1)
+            if not whatsapp_service:
+                return
+            
+            # Create personalized confirmation based on rating
+            confirmation_message = f"""✅ *Feedback Received - Thank You!*
+
+🙏 Thank you for your {rating}-star rating for *{self.event_name}*!
+
+*Your feedback:*
+{"⭐" * rating} ({rating}/5 stars)
+💬 "{feedback.comments}"
+
+"""
+            
+            if rating >= 4:
+                confirmation_message += f"""🌟 *We're delighted you loved our service!*
+
+Your positive feedback makes our team's day! Here's how you can help us grow:
+
+🔗 *Leave a Google Review:* 
+   Help others discover our catering services
+   
+� *Refer Friends & Family:* 
+   Share our contact: +233-XXX-XXXX
+   
+🎉 *Special Thank You Offer:*
+   Get 10% OFF your next booking!
+   Code: HAPPY{rating}STAR
+   Valid until: {(fields.Date.today() + timedelta(days=30)).strftime('%B %d, %Y')}
+
+📱 *Follow us on social media:*
+   📘 Facebook: [Your Facebook Page]
+   📸 Instagram: @yourcatering
+
+We can't wait to cater your next celebration! 💚"""
+            else:
+                confirmation_message += f"""📞 *We want to make this right.*
+
+Your feedback is incredibly valuable to us. We take every comment seriously.
+
+*Immediate Action:*
+✅ Your concerns have been escalated to our management team
+✅ A senior manager will contact you within 4 hours
+✅ We're committed to resolving any issues
+
+*How we'll follow up:*
+• Personal call to understand your experience
+• Review what went wrong and how to improve  
+• Offer appropriate compensation for any inconvenience
+• Ensure your next experience exceeds expectations
+
+*Contact us directly if urgent:*
+📞 Manager Hotline: +233-XXX-XXXX
+📧 Email: manager@yourcatering.com
+💬 WhatsApp: This number
+
+Your trust means everything to us. Thank you for giving us the opportunity to improve. 🙏
+
+*Ref #FB{feedback.id:04d}*"""
+            
+            whatsapp_service.send_message(mobile_number, confirmation_message)
+            _logger.info(f"Enhanced feedback confirmation sent for booking {self.name} with {rating} stars")
+            
+        except Exception as e:
+            _logger.error(f"Failed to send feedback confirmation: {str(e)}")
+
+    def _create_followup_activity(self, feedback):
+        """Create follow-up activity for negative feedback"""
+        try:
+            # Create activity for management follow-up
+            activity_vals = {
+                'activity_type_id': self.env.ref('mail.mail_activity_data_call').id,
+                'summary': f"URGENT: Follow up on {feedback.rating}-star feedback",
+                'note': f"""
+                <p><strong>Low Rating Alert:</strong> {feedback.rating}/5 stars</p>
+                <p><strong>Booking:</strong> {self.name} - {self.event_name}</p>
+                <p><strong>Customer:</strong> {self.partner_id.name} ({self.partner_id.mobile})</p>
+                <p><strong>Event Date:</strong> {self.event_date}</p>
+                <p><strong>Comments:</strong> {feedback.comments or 'No comments provided'}</p>
+                <p><strong>Action Required:</strong> Contact customer within 24 hours to address concerns and offer resolution.</p>
+                """,
+                'res_id': self.id,
+                'res_model_id': self.env.ref('cater.model_cater_event_booking').id,
+                'user_id': self.env.ref('base.user_admin').id,  # Assign to admin
+                'date_deadline': fields.Date.today() + timedelta(days=1)
+            }
+            
+            activity = self.env['mail.activity'].create(activity_vals)
+            _logger.info(f"Created follow-up activity {activity.id} for negative feedback {feedback.id}")
+            
+        except Exception as e:
+            _logger.error(f"Failed to create follow-up activity: {str(e)}")
+
     def _send_feedback_thank_you(self, mobile_number, rating):
-        """Send thank you message for feedback"""
+        """Send thank you message for feedback (DEPRECATED - Use _send_feedback_confirmation instead)"""
         try:
             whatsapp_service = self.env['cater.whatsapp.service'].search([('active', '=', True)], limit=1)
             if not whatsapp_service:
@@ -547,6 +748,124 @@ _Thank you for choosing our catering services._
             
         except Exception as e:
             _logger.error(f"Failed to send feedback thank you: {str(e)}")
+
+    @api.model
+    def get_feedback_analytics(self, days=30):
+        """Get comprehensive feedback analytics for dashboard"""
+        from datetime import timedelta
+        
+        date_from = fields.Datetime.now() - timedelta(days=days)
+        
+        # Get completed bookings in the period
+        domain = [
+            ('state', '=', 'completed'),
+            ('event_date', '>=', date_from)
+        ]
+        
+        completed_bookings = self.search(domain)
+        feedback_requested = completed_bookings.filtered('feedback_request_sent')
+        feedback_received = completed_bookings.filtered('feedback_received')
+        
+        # Calculate response rate
+        response_rate = 0
+        if feedback_requested:
+            response_rate = (len(feedback_received) / len(feedback_requested)) * 100
+        
+        # Get feedback statistics
+        feedback_records = self.env['cater.feedback'].search([
+            ('booking_id', 'in', completed_bookings.ids)
+        ])
+        
+        analytics = {
+            'period_days': days,
+            'completed_bookings': len(completed_bookings),
+            'feedback_requests_sent': len(feedback_requested),
+            'feedback_received_count': len(feedback_received),
+            'response_rate': round(response_rate, 1),
+            'pending_feedback': len(feedback_requested) - len(feedback_received),
+        }
+        
+        if feedback_records:
+            ratings = [int(f.rating) for f in feedback_records if f.rating]
+            if ratings:
+                analytics.update({
+                    'average_rating': round(sum(ratings) / len(ratings), 2),
+                    'five_star_count': len([r for r in ratings if r == 5]),
+                    'four_star_count': len([r for r in ratings if r == 4]),
+                    'three_star_count': len([r for r in ratings if r == 3]),
+                    'two_star_count': len([r for r in ratings if r == 2]),
+                    'one_star_count': len([r for r in ratings if r == 1]),
+                    'positive_feedback_rate': round((len([r for r in ratings if r >= 4]) / len(ratings)) * 100, 1),
+                    'needs_followup': len([r for r in ratings if r < 4]),
+                })
+        
+        return analytics
+
+    @api.model
+    def get_feedback_response_analytics(self, days=30):
+        """Get detailed feedback response analytics"""
+        from datetime import timedelta
+        
+        date_from = fields.Datetime.now() - timedelta(days=days)
+        
+        # Get all bookings in the period
+        domain = [
+            ('state', '=', 'completed'),
+            ('event_date', '>=', date_from)
+        ]
+        
+        completed_bookings = self.search(domain)
+        
+        # Categorize bookings
+        feedback_sent = completed_bookings.filtered('feedback_request_sent')
+        feedback_received = completed_bookings.filtered('feedback_received')
+        feedback_confirmed = completed_bookings.filtered('feedback_confirmed')
+        
+        # Calculate metrics
+        total_completed = len(completed_bookings)
+        request_rate = (len(feedback_sent) / total_completed * 100) if total_completed else 0
+        response_rate = (len(feedback_received) / len(feedback_sent) * 100) if feedback_sent else 0
+        confirmation_rate = (len(feedback_confirmed) / len(feedback_received) * 100) if feedback_received else 0
+        
+        # Get feedback details
+        feedback_records = self.env['cater.feedback'].search([
+            ('booking_id', 'in', completed_bookings.ids)
+        ])
+        
+        # Analyze response patterns
+        whatsapp_responses = feedback_records.filtered(lambda f: f.source == 'whatsapp')
+        avg_response_time = 0
+        
+        if whatsapp_responses:
+            response_times = []
+            for feedback in whatsapp_responses:
+                if feedback.booking_id.feedback_request_date:
+                    time_diff = feedback.feedback_date - feedback.booking_id.feedback_request_date
+                    response_times.append(time_diff.total_seconds() / 3600)  # Convert to hours
+            
+            avg_response_time = sum(response_times) / len(response_times) if response_times else 0
+        
+        # Rating distribution
+        rating_dist = {}
+        for i in range(1, 6):
+            rating_dist[f'{i}_star'] = len(feedback_records.filtered(lambda f: f.rating == str(i)))
+        
+        return {
+            'period_days': days,
+            'total_completed_bookings': total_completed,
+            'feedback_requests_sent': len(feedback_sent),
+            'feedback_received_count': len(feedback_received),
+            'feedback_confirmed_count': len(feedback_confirmed),
+            'request_rate': round(request_rate, 1),
+            'response_rate': round(response_rate, 1),
+            'confirmation_rate': round(confirmation_rate, 1),
+            'avg_response_time_hours': round(avg_response_time, 2),
+            'total_feedback': len(feedback_records),
+            'whatsapp_feedback': len(whatsapp_responses),
+            'rating_distribution': rating_dist,
+            'high_ratings_count': len(feedback_records.filtered(lambda f: int(f.rating) >= 4)),
+            'needs_followup': len(feedback_records.filtered(lambda f: int(f.rating) < 4)),
+        }
 
 
 class BookingMenuLine(models.Model):
